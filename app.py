@@ -1,31 +1,56 @@
 import streamlit as st
+import numpy as np
+import cv2
 from PIL import Image
 import io
-import pixellib
-from pixellib.tune_bg import alter_bg
 
-def load_model():
-    change_bg = alter_bg()
-    change_bg.load_pascalvoc_model("deeplabv3_xception_tf_dim_ordering_tf_kernels.h5")
-    return change_bg
+def remove_background(image):
+    # Convert PIL Image to OpenCV format
+    opencv_img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    
+    # Create a mask initialized with obvious background (2) and probable background (0)
+    mask = np.zeros(opencv_img.shape[:2], np.uint8)
+    
+    # Create temporary arrays used by grabCut
+    bgd_model = np.zeros((1,65), np.float64)
+    fgd_model = np.zeros((1,65), np.float64)
+    
+    # Define the rectangle that contains the foreground
+    rect = (20, 20, opencv_img.shape[1]-20, opencv_img.shape[0]-20)
+    
+    # Apply grabCut
+    cv2.grabCut(opencv_img, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
+    
+    # Create mask where 0 and 2 are background, 1 and 3 are foreground
+    mask2 = np.where((mask==2)|(mask==0), 0, 1).astype('uint8')
+    
+    # Multiply image with the mask to get cut-out image
+    result = opencv_img * mask2[:, :, np.newaxis]
+    
+    # Convert to RGBA
+    rgba = cv2.cvtColor(result, cv2.COLOR_BGR2BGRA)
+    
+    # Make all black pixels transparent
+    rgba[np.all(result == 0, axis=2)] = [0,0,0,0]
+    
+    # Convert back to PIL Image
+    result_pil = Image.fromarray(cv2.cvtColor(rgba, cv2.COLOR_BGRA2RGBA))
+    
+    return result_pil
 
-# Page configuration
-st.set_page_config(
-    page_title="AI Background Remover",
-    page_icon="🎨",
-    layout="wide"
-)
+# Page config
+st.set_page_config(page_title="Background Remover", page_icon="🎨", layout="wide")
 
 # Main UI
-st.title("🎨 AI Background Remover")
+st.title("🎨 Background Remover")
 st.markdown("""
-Remove backgrounds from your images using AI!
-- Easy to use
-- Works with most images
-- Free processing
+Upload an image to remove its background.
+- Simple to use
+- No API required
+- Works best with clear subjects
 """)
 
-# Create file uploader
+# File uploader
 uploaded_file = st.file_uploader("Choose an image...", type=['png', 'jpg', 'jpeg'])
 
 if uploaded_file is not None:
@@ -36,44 +61,45 @@ if uploaded_file is not None:
         image = Image.open(uploaded_file)
         st.image(image)
         
-        # Save uploaded file temporarily
-        with open("temp_image.png", "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
         if st.button("Remove Background"):
-            try:
-                with st.spinner("Processing image..."):
-                    # Load model and process image
-                    change_bg = load_model()
-                    output_path = "output_image.png"
-                    change_bg.color_bg("temp_image.png", output_path, 
-                                     colors=(0,0,0,0), is_raw=True)
+            with st.spinner("Processing... Please wait."):
+                try:
+                    # Process image
+                    result = remove_background(image)
                     
                     # Display result
                     with col2:
                         st.markdown("### Result")
-                        output_image = Image.open(output_path)
-                        st.image(output_image)
+                        st.image(result)
                         
-                        # Add download button
-                        with open(output_path, "rb") as file:
-                            btn = st.download_button(
-                                label="Download image",
-                                data=file,
-                                file_name="removed_background.png",
-                                mime="image/png"
-                            )
-            except Exception as e:
-                st.error(f"An error occurred: {str(e)}")
+                        # Save for download
+                        buf = io.BytesIO()
+                        result.save(buf, format='PNG')
+                        byte_im = buf.getvalue()
+                        
+                        # Download button
+                        st.download_button(
+                            label="Download Result",
+                            data=byte_im,
+                            file_name="removed_background.png",
+                            mime="image/png"
+                        )
+                except Exception as e:
+                    st.error(f"An error occurred: {str(e)}")
 
 # Tips
 with st.expander("Tips for best results"):
     st.markdown("""
-    - Use clear, well-lit images
-    - Ensure subject is in focus
-    - Works best with:
-        - People
-        - Animals
-        - Common objects
-    - Higher quality images give better results
+    - Use images with clear subjects
+    - Ensure good contrast between subject and background
+    - Works best when subject is centered
+    - Simple backgrounds give better results
+    - Larger images may take longer to process
     """)
+
+# Footer
+st.markdown("---")
+st.markdown("""
+💡 **Note**: This tool uses OpenCV's GrabCut algorithm. Results may vary depending on image complexity.
+For professional results, consider using specialized tools.
+""")
