@@ -3,13 +3,16 @@ import requests
 from PIL import Image
 import io
 
-def remove_background(image_file, api_key):
+# API Configuration
+API_KEY = 'LoM2Yq9R78eNzYGsz9ySbqXa'
+
+def remove_background(image_file):
     """Remove background using remove.bg API"""
     response = requests.post(
         'https://api.remove.bg/v1.0/removebg',
         files={'image_file': image_file},
         data={'size': 'auto'},
-        headers={'X-Api-Key': api_key},
+        headers={'X-Api-Key': API_KEY},
     )
     if response.status_code == requests.codes.ok:
         return response.content
@@ -32,14 +35,10 @@ Upload an image to remove its background automatically.
 - Quick processing
 """)
 
-# API Key input
-api_key = st.text_input("Enter your remove.bg API key", type="password")
-st.markdown("Get your API key at [remove.bg](https://www.remove.bg/api)")
-
 # File uploader
 upload = st.file_uploader("Choose an image...", type=['png', 'jpg', 'jpeg'])
 
-if upload and api_key:
+if upload:
     col1, col2 = st.columns(2)
     
     # Display original image
@@ -51,7 +50,7 @@ if upload and api_key:
             with st.spinner("Processing..."):
                 try:
                     # Process image
-                    output = remove_background(upload, api_key)
+                    output = remove_background(upload)
                     
                     if output:
                         with col2:
@@ -66,12 +65,9 @@ if upload and api_key:
                                 mime="image/png"
                             )
                     else:
-                        st.error("Error processing image. Please check your API key.")
+                        st.error("Error processing image. Please try again.")
                 except Exception as e:
                     st.error(f"An error occurred: {str(e)}")
-
-elif upload:
-    st.warning("Please enter your API key to process images.")
 
 # Tips section
 st.markdown("---")
@@ -84,12 +80,12 @@ with st.expander("Tips for best results"):
     - Higher quality images work better
     """)
 
-# Footer
-st.markdown("---")
-st.markdown("""
-💡 **Note**: You'll need a remove.bg API key to use this tool. 
-Get one for free at [remove.bg](https://www.remove.bg/api)
-""")
+# Progress tracker
+if 'processed_images' not in st.session_state:
+    st.session_state.processed_images = 0
+
+if st.session_state.processed_images > 0:
+    st.markdown(f"Images processed this session: {st.session_state.processed_images}")
 
 # Add a warning about processing time
 st.info("Note: Processing may take a few seconds depending on image size.")
