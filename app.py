@@ -1,123 +1,135 @@
 import streamlit as st
-from PIL import Image
-import torch
-import torch.nn.functional as F
-import torchvision.transforms as transforms
 import numpy as np
-import gdown
-import os
-from u2net import U2NET
+from PIL import Image
+import tensorflow as tf
+import tensorflow_hub as hub
+import io
 
 def load_model():
-    model_path = 'u2net.pth'
-    if not os.path.exists(model_path):
-        # Download U2NET model
-        url = 'https://drive.google.com/uc?id=1tCU5MM1LhRgGou5OpmpjBQbSrYIUoYab'
-        gdown.download(url, model_path, quiet=False)
-    
-    model = U2NET(3, 1)
-    model.load_state_dict(torch.load(model_path))
-    model.eval()
+    model = hub.load('https://tfhub.dev/tensorflow/lite-model/deeplabv3/1/metadata/2')
     return model
 
-def preprocess_image(image):
-    # Convert PIL image to tensor
-    transform = transforms.Compose([
-        transforms.Resize((320, 320)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                           std=[0.229, 0.224, 0.225])
-    ])
-    return transform(image).unsqueeze(0)
-
-def predict_mask(model, image):
-    # Get prediction
-    with torch.no_grad():
-        output = model(image)
-        pred = F.interpolate(output[0], size=image.shape[2:],
-                           mode='bilinear', align_corners=False)
-        pred = torch.sigmoid(pred)
-        pred = pred.squeeze().cpu().numpy()
-    return pred
-
-def remove_background(image, model):
-    # Convert to RGB if needed
+def process_image(image):
+    # Convert to RGB if necessary
     if image.mode != 'RGB':
         image = image.convert('RGB')
     
-    # Preprocess
-    input_tensor = preprocess_image(image)
+    # Resize to model input size while maintaining aspect ratio
+    target_size = (513, 513)
+    image = image.resize(target_size, Image.Resampling.LANCZOS)
     
-    # Predict mask
-    mask = predict_mask(model, input_tensor)
+    # Convert to numpy array and normalize
+    input_tensor = np.array(image)
+    input_tensor = tf.cast(input_tensor, tf.float32) / 127.5 - 1
+    input_tensor = tf.expand_dims(input_tensor, 0)
     
-    # Convert mask to PIL Image
-    mask = Image.fromarray((mask * 255).astype(np.uint8))
-    mask = mask.resize(image.size)
+    return input_tensor, image
+
+def remove_background(model, image):
+    # Process image
+    input_tensor, resized_image = process_image(image)
     
-    # Add alpha channel
+    # Run model prediction
+    predictions = model.signatures['serving_default'](tf.constant(input_tensor))
+    mask = tf.argmax(predictions['output'], axis=-1)
+    mask = tf.squeeze(mask).numpy()
+    
+    # Create alpha channel (255 for foreground, 0 for background)
+    alpha = np.where(mask > 0, 255, 0).astype(np.uint8)
+    
+    # Resize alpha back to original image size
+    alpha = Image.fromarray(alpha).resize(image.size, Image.Resampling.LANCZOS)
+    
+    # Add alpha channel to original image
     result = image.copy()
-    result.putalpha(mask)
+    result.putalpha(alpha)
     
     return result
 
-# Page setup
-st.set_page_config(page_title="ML Background Remover", layout="wide")
+# Page configuration
+st.set_page_config(
+    page_title="AI Background Remover",
+    page_icon="🎨",
+    layout="wide"
+)
 
-st.title("🤖 ML-Powered Background Remover")
+# Main UI
+st.title("🎨 AI Background Remover")
 st.markdown("""
-This tool uses U2NET, a deep learning model, to remove backgrounds from images.
-- Advanced AI-based removal
-- Works with complex backgrounds
+Use advanced AI to remove backgrounds from your images!
+- Powered by Google's DeepLab V3
+- Handles complex backgrounds
 - Free to use
 """)
 
 # Load model
 try:
-    with st.spinner("Loading ML model... (this may take a minute on first run)"):
+    with st.spinner("Loading AI model... (this may take a moment on first run)"):
         model = load_model()
-    
+        
     # File uploader
-    uploaded_file = st.file_uploader("Choose an image...", type=['png', 'jpg', 'jpeg'])
+    uploaded_file = st.file_uploader(
+        "Choose an image...", 
+        type=['png', 'jpg', 'jpeg'],
+        help="Upload an image to remove its background"
+    )
 
     if uploaded_file:
+        # Create two columns for before/after
         col1, col2 = st.columns(2)
         
-        # Display original image
         with col1:
             st.markdown("### Original Image")
+            # Load and display original image
             image = Image.open(uploaded_file)
-            st.image(image)
+            st.image(image, use_column_width=True)
             
-            if st.button("Remove Background"):
-                with st.spinner("Processing... (this may take a few seconds)"):
-                    # Process image
-                    result = remove_background(image, model)
-                    
-                    # Display result
-                    with col2:
-                        st.markdown("### Result")
-                        st.image(result)
+            if st.button("Remove Background", use_container_width=True):
+                with st.spinner("Processing... Please wait..."):
+                    try:
+                        # Process image and remove background
+                        result = remove_background(model, image)
                         
-                        # Save for download
-                        output = BytesIO()
-                        result.save(output, format='PNG')
+                        # Display result
+                        with col2:
+                            st.markdown("### Result")
+                            st.image(result, use_column_width=True)
+                            
+                            # Save for download
+                            buf = io.BytesIO()
+                            result.save(buf, format='PNG')
+                            byte_im = buf.getvalue()
+                            
+                            # Download button
+                            st.download_button(
+                                label="Download Result",
+                                data=byte_im,
+                                file_name="background_removed.png",
+                                mime="image/png",
+                                use_container_width=True
+                            )
+                    except Exception as e:
+                        st.error(f"Error processing image: {str(e)}")
                         
-                        st.download_button(
-                            "Download Result",
-                            output.getvalue(),
-                            "background_removed.png",
-                            "image/png"
-                        )
 except Exception as e:
-    st.error(f"An error occurred: {str(e)}")
+    st.error(f"Error loading model: {str(e)}")
 
-# Tips
-with st.expander("Tips for best results"):
+# Tips section
+with st.expander("📝 Tips for best results"):
     st.markdown("""
-    - Works well with most types of images
-    - Better results with clear subjects
-    - Can handle complex backgrounds
-    - Processing larger images takes more time
-    - Model works best when subject is clearly visible
+    - Use images with clear subjects
+    - Good lighting helps improve results
+    - The model works best with:
+        - People
+        - Animals
+        - Common objects
+        - Vehicles
+    - Complex or blurred edges might need touch-up
     """)
+
+# Footer
+st.markdown("---")
+st.markdown("""
+💡 **Note**: This tool uses Google's DeepLab V3 model for semantic segmentation.
+Processing time may vary depending on image size and complexity.
+""")
