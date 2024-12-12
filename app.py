@@ -1,101 +1,123 @@
 import streamlit as st
 from PIL import Image
+import torch
+import torch.nn.functional as F
+import torchvision.transforms as transforms
 import numpy as np
-from io import BytesIO
+import gdown
+import os
+from u2net import U2NET
 
-def remove_background(image, threshold=240):
-    # Convert the image to RGBA if it isn't already
-    if image.mode != 'RGBA':
-        image = image.convert('RGBA')
+def load_model():
+    model_path = 'u2net.pth'
+    if not os.path.exists(model_path):
+        # Download U2NET model
+        url = 'https://drive.google.com/uc?id=1tCU5MM1LhRgGou5OpmpjBQbSrYIUoYab'
+        gdown.download(url, model_path, quiet=False)
     
-    # Convert to numpy array
-    data = np.array(image)
-    
-    # Calculate the average of RGB channels
-    rgb_avg = np.mean(data[:, :, :3], axis=2)
-    
-    # Create an alpha mask based on the brightness
-    alpha_mask = (rgb_avg < threshold).astype(np.uint8) * 255
-    
-    # Apply the mask to the alpha channel
-    data[:, :, 3] = alpha_mask
-    
-    # Convert back to PIL Image
-    return Image.fromarray(data)
+    model = U2NET(3, 1)
+    model.load_state_dict(torch.load(model_path))
+    model.eval()
+    return model
 
-# Page config
-st.set_page_config(page_title="Background Remover", page_icon="🖼️", layout="centered")
+def preprocess_image(image):
+    # Convert PIL image to tensor
+    transform = transforms.Compose([
+        transforms.Resize((320, 320)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                           std=[0.229, 0.224, 0.225])
+    ])
+    return transform(image).unsqueeze(0)
 
-# Main UI
-st.title("🖼️ Background Remover")
+def predict_mask(model, image):
+    # Get prediction
+    with torch.no_grad():
+        output = model(image)
+        pred = F.interpolate(output[0], size=image.shape[2:],
+                           mode='bilinear', align_corners=False)
+        pred = torch.sigmoid(pred)
+        pred = pred.squeeze().cpu().numpy()
+    return pred
+
+def remove_background(image, model):
+    # Convert to RGB if needed
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    
+    # Preprocess
+    input_tensor = preprocess_image(image)
+    
+    # Predict mask
+    mask = predict_mask(model, input_tensor)
+    
+    # Convert mask to PIL Image
+    mask = Image.fromarray((mask * 255).astype(np.uint8))
+    mask = mask.resize(image.size)
+    
+    # Add alpha channel
+    result = image.copy()
+    result.putalpha(mask)
+    
+    return result
+
+# Page setup
+st.set_page_config(page_title="ML Background Remover", layout="wide")
+
+st.title("🤖 ML-Powered Background Remover")
 st.markdown("""
-Upload an image to remove light backgrounds automatically.
+This tool uses U2NET, a deep learning model, to remove backgrounds from images.
+- Advanced AI-based removal
+- Works with complex backgrounds
 - Free to use
-- No API needed
-- Works best with light backgrounds
-- Supports PNG and JPEG formats
 """)
 
-# Add threshold slider
-threshold = st.slider("Brightness Threshold (adjust if needed)", 
-                     min_value=0, 
-                     max_value=255, 
-                     value=240,
-                     help="Lower value = keep more pixels, Higher value = remove more pixels")
-
-# File uploader
-uploaded_file = st.file_uploader("Choose an image...", type=['png', 'jpg', 'jpeg'])
-
-if uploaded_file is not None:
-    # Display original and processed images side by side
-    col1, col2 = st.columns(2)
+# Load model
+try:
+    with st.spinner("Loading ML model... (this may take a minute on first run)"):
+        model = load_model()
     
-    # Original image
-    with col1:
-        st.markdown("### Original Image")
-        image = Image.open(uploaded_file)
-        st.image(image)
+    # File uploader
+    uploaded_file = st.file_uploader("Choose an image...", type=['png', 'jpg', 'jpeg'])
+
+    if uploaded_file:
+        col1, col2 = st.columns(2)
         
-        if st.button("Remove Background"):
-            with st.spinner("Processing..."):
-                try:
-                    # Process the image
-                    output_image = remove_background(image, threshold)
+        # Display original image
+        with col1:
+            st.markdown("### Original Image")
+            image = Image.open(uploaded_file)
+            st.image(image)
+            
+            if st.button("Remove Background"):
+                with st.spinner("Processing... (this may take a few seconds)"):
+                    # Process image
+                    result = remove_background(image, model)
                     
                     # Display result
                     with col2:
                         st.markdown("### Result")
-                        st.image(output_image)
+                        st.image(result)
                         
-                        # Convert to bytes for download
-                        buf = BytesIO()
-                        output_image.save(buf, format='PNG')
-                        byte_im = buf.getvalue()
+                        # Save for download
+                        output = BytesIO()
+                        result.save(output, format='PNG')
                         
-                        # Download button
                         st.download_button(
-                            label="Download Result",
-                            data=byte_im,
-                            file_name="removed_background.png",
-                            mime="image/png"
+                            "Download Result",
+                            output.getvalue(),
+                            "background_removed.png",
+                            "image/png"
                         )
-                except Exception as e:
-                    st.error(f"An error occurred: {str(e)}")
+except Exception as e:
+    st.error(f"An error occurred: {str(e)}")
 
 # Tips
 with st.expander("Tips for best results"):
     st.markdown("""
-    - Use images with light backgrounds
-    - Ensure good contrast between subject and background
-    - Adjust the threshold slider if needed:
-        - Lower values keep more of the image
-        - Higher values remove more pixels
-    - Best results with product photos on white backgrounds
+    - Works well with most types of images
+    - Better results with clear subjects
+    - Can handle complex backgrounds
+    - Processing larger images takes more time
+    - Model works best when subject is clearly visible
     """)
-
-# Add note about limitations
-st.markdown("---")
-st.markdown("""
-💡 **Note**: This simple version works best with light backgrounds. 
-For better results with complex backgrounds, you might want to try professional tools.
-""")
