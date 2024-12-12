@@ -1,16 +1,27 @@
 import streamlit as st
 from PIL import Image
-from background_removal import BackgroundRemoval
+import numpy as np
+from io import BytesIO
 
-def remove_background(image):
-    # Convert PIL Image to bytes
-    img_byte_arr = io.BytesIO()
-    image.save(img_byte_arr, format='PNG')
-    img_byte_arr = img_byte_arr.getvalue()
+def remove_background(image, threshold=240):
+    # Convert the image to RGBA if it isn't already
+    if image.mode != 'RGBA':
+        image = image.convert('RGBA')
     
-    # Remove background
-    output = BackgroundRemoval().remove_background(img_byte_arr)
-    return output
+    # Convert to numpy array
+    data = np.array(image)
+    
+    # Calculate the average of RGB channels
+    rgb_avg = np.mean(data[:, :, :3], axis=2)
+    
+    # Create an alpha mask based on the brightness
+    alpha_mask = (rgb_avg < threshold).astype(np.uint8) * 255
+    
+    # Apply the mask to the alpha channel
+    data[:, :, 3] = alpha_mask
+    
+    # Convert back to PIL Image
+    return Image.fromarray(data)
 
 # Page config
 st.set_page_config(page_title="Background Remover", page_icon="🖼️", layout="centered")
@@ -18,11 +29,19 @@ st.set_page_config(page_title="Background Remover", page_icon="🖼️", layout=
 # Main UI
 st.title("🖼️ Background Remover")
 st.markdown("""
-Upload an image to remove its background automatically.
+Upload an image to remove light backgrounds automatically.
 - Free to use
-- No API key needed
+- No API needed
+- Works best with light backgrounds
 - Supports PNG and JPEG formats
 """)
+
+# Add threshold slider
+threshold = st.slider("Brightness Threshold (adjust if needed)", 
+                     min_value=0, 
+                     max_value=255, 
+                     value=240,
+                     help="Lower value = keep more pixels, Higher value = remove more pixels")
 
 # File uploader
 uploaded_file = st.file_uploader("Choose an image...", type=['png', 'jpg', 'jpeg'])
@@ -38,20 +57,25 @@ if uploaded_file is not None:
         st.image(image)
         
         if st.button("Remove Background"):
-            with st.spinner("Processing... This may take a moment."):
+            with st.spinner("Processing..."):
                 try:
                     # Process the image
-                    output = remove_background(image)
+                    output_image = remove_background(image, threshold)
                     
                     # Display result
                     with col2:
                         st.markdown("### Result")
-                        st.image(output)
+                        st.image(output_image)
+                        
+                        # Convert to bytes for download
+                        buf = BytesIO()
+                        output_image.save(buf, format='PNG')
+                        byte_im = buf.getvalue()
                         
                         # Download button
                         st.download_button(
                             label="Download Result",
-                            data=output,
+                            data=byte_im,
                             file_name="removed_background.png",
                             mime="image/png"
                         )
@@ -61,8 +85,17 @@ if uploaded_file is not None:
 # Tips
 with st.expander("Tips for best results"):
     st.markdown("""
-    - Use images with clear subjects
-    - Ensure good lighting
-    - Keep the subject in focus
-    - Avoid complex backgrounds
+    - Use images with light backgrounds
+    - Ensure good contrast between subject and background
+    - Adjust the threshold slider if needed:
+        - Lower values keep more of the image
+        - Higher values remove more pixels
+    - Best results with product photos on white backgrounds
     """)
+
+# Add note about limitations
+st.markdown("---")
+st.markdown("""
+💡 **Note**: This simple version works best with light backgrounds. 
+For better results with complex backgrounds, you might want to try professional tools.
+""")
