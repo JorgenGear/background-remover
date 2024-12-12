@@ -1,4 +1,5 @@
 streamlit
-rembg
+mediapipe
+opencv-python-headless
+numpy
 Pillow
-onnxruntime
