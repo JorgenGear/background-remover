@@ -1,5 +1,4 @@
 streamlit
-tensorflow
-tensorflow-hub
+pixellib
 Pillow
-numpy
+tensorflow
